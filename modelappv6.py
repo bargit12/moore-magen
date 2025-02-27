@@ -26,10 +26,11 @@ layout_type = st.radio("Layout Type", options=["Central and Fronts", "Main Regio
 if layout_type == "Main Regionals":
     st.info("Note: With 'Main Regionals', all warehouses must be of type MAIN.")
 
-shipping_cost_rate = st.number_input("Shipping Cost Rate (per km per order unit)", min_value=0.0, value=1.0, step=0.1)
+# עדכון: קצב עלות משלוח – כעת פר מייל
+shipping_cost_rate = st.number_input("Shipping Cost Rate (per mile per order unit)", min_value=0.0, value=1.0, step=0.1, format="$%.2f")
 
-# קלט חדש: עלות ליחידה – נעביר אותה כמספר שלם
-unit_cost = st.number_input("Unit Cost (per unit)", min_value=0, value=10, step=1, format="%d")
+# קלט חדש: עלות ליחידה (עם סימן דולר)
+unit_cost = st.number_input("Unit Cost (per unit)", min_value=0, value=10, step=1, format="$%d")
 
 # חשב את ערך ה-Z עבור רמת השירות (באמצעות התפלגות נורמלית)
 Z_value = norm.ppf(service_level)
@@ -61,7 +62,6 @@ for area in selected_market_areas:
     zero_demand_months = []
     for m in range(12):
         col = cols[m % 4]
-        # Forecast demand as an integer
         value = col.number_input(f"Month {m+1}", min_value=0, value=0, step=1, format="%d", key=f"{area}_forecast_{m}")
         if value == 0:
             zero_demand_months.append(m+1)
@@ -113,12 +113,12 @@ for i in range(int(num_warehouses)):
     rent_pricing_method = st.radio(f"Select Rent Pricing Method for Warehouse {i+1} (Price per Year)", 
                                    options=["Fixed Rent Price", "Square Foot Rent Price"], key=f"rent_method_{i}")
     if rent_pricing_method == "Fixed Rent Price":
-        rent_price = st.number_input(f"Enter Fixed Rent Price (per year) for Warehouse {i+1}", min_value=0.0, value=1000.0, key=f"fixed_rent_{i}")
+        rent_price = st.number_input(f"Enter Fixed Rent Price (per year) for Warehouse {i+1}", min_value=0.0, value=1000.0, key=f"fixed_rent_{i}", format="$%.0f")
     else:
-        rent_price = st.number_input(f"Enter Rent Price per Square Foot (per year) for Warehouse {i+1}", min_value=0.0, value=10.0, key=f"sqft_rent_{i}")
+        rent_price = st.number_input(f"Enter Rent Price per Square Foot (per year) for Warehouse {i+1}", min_value=0.0, value=10.0, key=f"sqft_rent_{i}", format="$%.0f")
     
-    # קלט עבור השכר השנתי הממוצע לעובד – נעשה גם כאן כמספר שלם
-    avg_employee_salary = st.number_input(f"Enter Average Annual Salary per Employee for Warehouse {i+1}", min_value=0, value=50000, step=1000, format="%d", key=f"employee_salary_{i}")
+    # קלט עבור השכר השנתי הממוצע לעובד – עם סימן דולר
+    avg_employee_salary = st.number_input(f"Enter Average Annual Salary per Employee for Warehouse {i+1}", min_value=0, value=50000, step=1000, format="$%d", key=f"employee_salary_{i}")
     
     wh_dict = {
         "location": location,
@@ -131,12 +131,12 @@ for i in range(int(num_warehouses)):
     
     if wh_type == "MAIN":
         lt_shipping = st.number_input(f"Enter Lead Time (days) for shipping from Israel to Warehouse {i+1} (MAIN)", min_value=0, value=5, step=1, format="%d", key=f"lt_shipping_{i}")
-        shipping_cost_40hc = st.number_input(f"Enter Shipping Cost for a 40HC container (per container) from Israel to Warehouse {i+1} (MAIN)", min_value=0, value=2000, step=1, format="%d", key=f"shipping_cost_40hc_{i}")
+        shipping_cost_40hc = st.number_input(f"Enter Shipping Cost for a 40HC container (per container) from Israel to Warehouse {i+1} (MAIN)", min_value=0, value=2000, step=1, format="$%d", key=f"shipping_cost_40hc_{i}")
         wh_dict["lt_shipping"] = lt_shipping
         wh_dict["shipping_cost_40hc"] = shipping_cost_40hc
     elif wh_type == "FRONT":
-        front_shipping_cost_40 = st.number_input(f"Enter Shipping Cost from MAIN warehouse to Warehouse {i+1} (FRONT) for a 40ft HC container", min_value=0, value=500, step=1, format="%d", key=f"front_shipping_cost_40_{i}")
-        front_shipping_cost_53 = st.number_input(f"Enter Shipping Cost from MAIN warehouse to Warehouse {i+1} (FRONT) for a 53ft HC container", min_value=0, value=600, step=1, format="%d", key=f"front_shipping_cost_53_{i}")
+        front_shipping_cost_40 = st.number_input(f"Enter Shipping Cost from MAIN warehouse to Warehouse {i+1} (FRONT) for a 40ft HC container", min_value=0, value=500, step=1, format="$%d", key=f"front_shipping_cost_40_{i}")
+        front_shipping_cost_53 = st.number_input(f"Enter Shipping Cost from MAIN warehouse to Warehouse {i+1} (FRONT) for a 53ft HC container", min_value=0, value=600, step=1, format="$%d", key=f"front_shipping_cost_53_{i}")
         wh_dict["front_shipping_cost_40"] = front_shipping_cost_40
         wh_dict["front_shipping_cost_53"] = front_shipping_cost_53
         
@@ -241,14 +241,13 @@ if st.button("Calculate Inventory Financing"):
     st.subheader("Inventory Financing Results")
     st.write(f"Total Safety Stock: {total_safety_stock:.0f} units")
     st.write(f"Average Inventory Level: {total_avg_inventory:.0f} units")
-    st.write(f"Inventory Financing Cost (per year): {financing_cost:.0f}")
+    st.write(f"Inventory Financing Cost (per year): ${financing_cost:.0f}")
 
 # =============================================================================
 # Submission
 # =============================================================================
 if st.button("Submit Data"):
     st.write("Data submitted successfully!")
-    st.write("Global Parameters:", {"interest_rate": interest_rate, "service_level": service_level, "layout_type": layout_type, "shipping_cost_rate": shipping_cost_rate, "unit_cost": unit_cost})
+    st.write("Global Parameters:", {"interest_rate": interest_rate, "service_level": service_level, "layout_type": layout_type, "shipping_cost_rate": f"${shipping_cost_rate:.2f}", "unit_cost": f"${unit_cost}"})
     st.write("Market Area Data:", market_area_data)
     st.write("Warehouse Data:", warehouse_data)
-
