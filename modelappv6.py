@@ -42,7 +42,6 @@ layout_type = st.radio(
 if layout_type == "Main Regionals":
     st.info("Note: With 'Main Regionals', all warehouses must be of type MAIN.")
 
-# Shipping cost rate in $ per mile per order unit
 shipping_cost_rate = st.number_input(
     "Shipping Cost Rate (per mile per order unit, in $)",
     min_value=0.0,
@@ -51,7 +50,6 @@ shipping_cost_rate = st.number_input(
     format="%.2f"
 )
 
-# Unit cost in $
 unit_cost = st.number_input(
     "Unit Cost (per unit, in $)",
     min_value=0,
@@ -60,8 +58,37 @@ unit_cost = st.number_input(
     format="%.0f"
 )
 
-# חשב את ערך ה-Z עבור רמת השירות (באמצעות התפלגות נורמלית)
+# חישוב ערך ה-Z עבור רמת השירות
 Z_value = norm.ppf(service_level)
+
+# =============================================================================
+# Rental Parameters (NEW)
+# =============================================================================
+st.markdown("<p class='subheader-font'>Rental Parameters</p>", unsafe_allow_html=True)
+
+sq_ft_per_unit = st.number_input(
+    "Square feet required per unit (default 0.8)",
+    min_value=0.0,
+    value=0.8,
+    step=0.1,
+    format="%.1f"
+)
+
+overhead_factor_main = st.number_input(
+    "Overhead factor for MAIN warehouse (default 1.2)",
+    min_value=1.0,
+    value=1.2,
+    step=0.1,
+    format="%.1f"
+)
+
+overhead_factor_front = st.number_input(
+    "Overhead factor for FRONT warehouse (default 1.5)",
+    min_value=1.0,
+    value=1.5,
+    step=0.1,
+    format="%.1f"
+)
 
 # =============================================================================
 # Market Areas Setup
@@ -320,22 +347,146 @@ if market_not_served:
     st.error(f"The following market areas are not served by any warehouse: {', '.join(market_not_served)}")
 
 # =============================================================================
-# Inventory Financing Calculation
+# Helper Functions for Rental Calculation
+# =============================================================================
+
+def compute_safety_stock_main(warehouse, layout):
+    """
+    מחזיר את מלאי הביטחון (Safety Stock) עבור מחסן מרכזי (MAIN),
+    בהתאם לפריסה (Central and Fronts / Main Regionals).
+    """
+    # סך סטיות התקן היומיות של האזורים שהמחסן משרת
+    std_sum = 0.0
+    for area in warehouse["served_markets"]:
+        if area in market_area_data:
+            std_sum += market_area_data[area]["std_daily_demand"]
+    
+    LT = warehouse.get("lt_shipping", 0)
+    safety_stock_main = std_sum * sqrt(LT) * Z_value
+    
+    if layout == "Central and Fronts":
+        # הוספת 12 * (סכום הביקוש היומי של כל מחסן קדמי) – בדיוק כמו בחישוב Inventory
+        front_daily_demand = 0.0
+        for wh in warehouse_data:
+            if wh["type"] == "FRONT":
+                # סכום הביקוש היומי באזורים שמשרת המחסן הקדמי
+                front_daily_demand += sum(
+                    market_area_data[a]["avg_daily_demand"]
+                    for a in wh["served_markets"]
+                    if a in market_area_data
+                )
+        safety_stock_main += 12 * front_daily_demand
+    
+    return safety_stock_main
+
+
+def compute_max_monthly_forecast(warehouse):
+    """
+    מחזיר את הביקוש החודשי המקסימלי (max over 12 months)
+    על בסיס סכימת הביקושים בכל האזורים שהמחסן משרת.
+    """
+    max_monthly = 0
+    served_markets = warehouse["served_markets"]
+    for m in range(12):
+        month_sum = 0
+        for area in served_markets:
+            if area in market_area_data:
+                month_sum += market_area_data[area]["forecast_demand"][m]
+        if month_sum > max_monthly:
+            max_monthly = month_sum
+    return max_monthly
+
+
+def compute_max_monthly_forecast_front(warehouse):
+    """
+    מחזיר את הביקוש החודשי המקסימלי (max over 12 months)
+    על בסיס סכימת הביקושים בכל האזורים שהמחסן הקדמי משרת.
+    """
+    return compute_max_monthly_forecast(warehouse)
+
+
+def compute_daily_demand_sum(warehouse):
+    """
+    סכום הביקוש היומי בכל האזורים שמשרת המחסן (לרוב רלוונטי למחסן FRONT).
+    """
+    return sum(
+        market_area_data[a]["avg_daily_demand"]
+        for a in warehouse["served_markets"]
+        if a in market_area_data
+    )
+
+# =============================================================================
+# Rental Cost Calculation (NEW)
+# =============================================================================
+st.markdown("<p class='subheader-font'>Rental Cost Calculation</p>", unsafe_allow_html=True)
+
+if st.button("Calculate Rental Costs"):
+    total_rental_cost = 0.0
+    
+    for wh in warehouse_data:
+        rent_method = wh["rent_pricing_method"]
+        rent_price = wh["rent_price"]  # price per year or per sq ft
+        wh_type = wh["type"]
+        
+        if rent_method == "Fixed Rent Price":
+            # פשוט העלות השנתית שהוזנה
+            wh_rental_cost = rent_price
+            wh_area = 0.0
+        else:
+            # Square Foot Rent Price
+            if wh_type == "MAIN":
+                # מחושב ע"פ:
+                # cost = rent_price * sq_ft_per_unit * overhead_factor_main * (max_monthly_forecast + safety_stock_main)
+                max_monthly = compute_max_monthly_forecast(wh)
+                safety_stock_main = compute_safety_stock_main(wh, layout_type)
+                total_units = max_monthly + safety_stock_main
+                
+                wh_rental_cost = rent_price * sq_ft_per_unit * overhead_factor_main * total_units
+                wh_area = wh_rental_cost / rent_price  # כמה פיט מרובע בסה"כ
+            else:
+                # FRONT
+                # cost = rent_price * sq_ft_per_unit * overhead_factor_front * ( (max_monthly_forecast / 4) + (daily_demand_sum * 12) )
+                max_monthly = compute_max_monthly_forecast_front(wh)
+                daily_sum = compute_daily_demand_sum(wh)
+                total_units = (max_monthly / 4.0) + (daily_sum * 12.0)
+                
+                wh_rental_cost = rent_price * sq_ft_per_unit * overhead_factor_front * total_units
+                wh_area = wh_rental_cost / rent_price
+            
+        wh["rental_cost"] = wh_rental_cost
+        wh["rental_area"] = wh_area
+        total_rental_cost += wh_rental_cost
+    
+    st.subheader("Rental Cost Results")
+    for i, wh in enumerate(warehouse_data):
+        st.write(f"**Warehouse {i+1}** - Location: {wh['location']}")
+        st.write(f"Type: {wh['type']}")
+        st.write(f"Pricing Method: {wh['rent_pricing_method']}")
+        st.write(f"Annual Rental Cost: ${wh['rental_cost']:.2f}")
+        
+        if wh["rent_pricing_method"] == "Square Foot Rent Price":
+            st.write(f"Calculated Warehouse Area (sq ft): {wh['rental_area']:.2f}")
+        
+        st.write("---")
+    
+    st.write(f"**Total Rental Cost for All Warehouses:** ${total_rental_cost:.2f}")
+
+# =============================================================================
+# (Optional) Inventory Financing Calculation (Existing)
 # =============================================================================
 st.markdown("<p class='subheader-font'>Inventory Financing Calculation</p>", unsafe_allow_html=True)
 
 if st.button("Calculate Inventory Financing"):
+    # (תוכן החישוב הקודם עבור עלות המימון)
     financing_cost = 0
     total_avg_inventory = 0
     total_safety_stock = 0
 
     if layout_type == "Central and Fronts":
-        # Find the main warehouse (assume there's exactly one)
         main_wh = next((wh for wh in warehouse_data if wh["type"] == "MAIN"), None)
         if main_wh is None:
             st.error("No MAIN warehouse found for 'Central and Fronts' layout.")
         else:
-            # Sum of std dev for all areas the main warehouse serves
             std_sum = sum(
                 market_area_data[area]["std_daily_demand"]
                 for area in main_wh["served_markets"]
@@ -344,7 +495,7 @@ if st.button("Calculate Inventory Financing"):
             LT = main_wh.get("lt_shipping", 0)
             safety_stock_main = std_sum * sqrt(LT) * Z_value
             
-            # Add 12 * sum of daily demand for all FRONT warehouses
+            # הוספת רכיב הביטחון מהמחסנים הקדמיים
             front_daily_demand = 0
             for wh in warehouse_data:
                 if wh["type"] == "FRONT":
@@ -355,7 +506,6 @@ if st.button("Calculate Inventory Financing"):
                     )
             safety_stock = safety_stock_main + 12 * front_daily_demand
             
-            # Annual demand for the main warehouse
             annual_demand = 0
             for area in main_wh["served_markets"]:
                 if area in market_area_data:
@@ -391,7 +541,6 @@ if st.button("Calculate Inventory Financing"):
                 overall_safety_stock += safety_stock_wh
                 overall_avg_inventory += avg_inventory_wh
                 overall_annual_demand += annual_demand_wh
-        
         total_avg_inventory = overall_avg_inventory
         total_safety_stock = overall_safety_stock
         financing_cost = overall_avg_inventory * (interest_rate / 100) * unit_cost
