@@ -45,9 +45,9 @@ if layout_type == "Main Regionals":
 # Note: Removed global shipping cost rate input.
 unit_cost = st.number_input(
     "Unit Cost (per unit, in $)",
-    min_value=0,
+    min_value=0.0,
     value=10.0,
-    step=1,
+    step=1.0,
 )
 
 # Calculate Z_value from service_level
