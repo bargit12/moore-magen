@@ -225,12 +225,11 @@ for i in range(int(num_warehouses)):
     
     avg_employee_salary = st.number_input(f"Enter Average Annual Salary per Employee for Warehouse {i+1} (in $)", min_value=0, value=50000, step=1000, format="%d", key=f"employee_salary_{i}")
     
-    # New: Input for number of employees with defaults:
+    # Labor: number of employees (defaults vary)
     if wh_type == "MAIN":
-        # For MAIN warehouse, default is 3 if serves only one market, else 4.
         default_emp = 3 if len(served_markets) == 1 else 4
     else:
-        default_emp = 2  # For FRONT warehouse
+        default_emp = 2
     num_employees = st.number_input(f"Enter Number of Employees for Warehouse {i+1}", min_value=0, value=default_emp, step=1, key=f"num_employees_{i}")
     
     wh_dict = {
@@ -292,22 +291,19 @@ if market_not_served:
 # =============================================================================
 
 def compute_safety_stock_main(warehouse, layout):
+    # Sum std deviations for central's served markets...
     std_sum = 0.0
     for area in warehouse["served_markets"]:
         if area in market_area_data:
             std_sum += market_area_data[area]["std_daily_demand"]
+    # Plus, for each FRONT warehouse served by this central, add their std deviations as well.
+    for wh in warehouse_data:
+        if wh["type"] == "FRONT" and wh.get("serving_central") and (warehouse["location"] in wh["serving_central"]):
+            for area in wh["served_markets"]:
+                if area in market_area_data:
+                    std_sum += market_area_data[area]["std_daily_demand"]
     LT = warehouse.get("lt_shipping", 0)
     safety_stock_main = std_sum * sqrt(LT) * Z_value
-    if layout == "Central and Fronts":
-        front_daily_demand = 0.0
-        for wh in warehouse_data:
-            if wh["type"] == "FRONT":
-                front_daily_demand += sum(
-                    market_area_data[a]["avg_daily_demand"]
-                    for a in wh["served_markets"]
-                    if a in market_area_data
-                )
-        safety_stock_main += 12 * front_daily_demand
     return safety_stock_main
 
 def compute_max_monthly_forecast(warehouse):
@@ -352,7 +348,7 @@ if st.button("Calculate Rental Costs"):
                 total_units = max_monthly + safety_stock_main
                 wh_rental_cost = rent_price * sq_ft_per_unit * overhead_factor_main * total_units
                 wh_area = wh_rental_cost / rent_price
-            else:
+            else:  # FRONT
                 max_monthly = compute_max_monthly_forecast_front(wh)
                 daily_sum = compute_daily_demand_sum(wh)
                 total_units = (max_monthly / 4.0) + (daily_sum * 12.0)
@@ -392,24 +388,16 @@ if st.button("Calculate Inventory Financing"):
                 if area in market_area_data
             )
             LT = main_wh.get("lt_shipping", 0)
-            safety_stock_main = std_sum * sqrt(LT) * Z_value
-
-            front_daily_demand = 0.0
-            for wh in warehouse_data:
-                if wh["type"] == "FRONT":
-                    front_daily_demand += sum(
-                        market_area_data[area]["avg_daily_demand"]
-                        for area in wh["served_markets"]
-                        if area in market_area_data
-                    )
-            safety_stock = safety_stock_main + 12 * front_daily_demand
+            # Updated safety stock: includes std deviations for front warehouses as well.
+            safety_stock_main = compute_safety_stock_main(main_wh, layout_type)
+            safety_stock = safety_stock_main  # Now already כולל את כל הסטיות
 
             annual_demand = 0.0
             for area in main_wh["served_markets"]:
                 if area in market_area_data:
                     annual_demand += sum(market_area_data[area]["forecast_demand"])
 
-            # Updated formula: avg_inventory = (annual_demand / 12) + safety_stock
+            # Updated avg_inventory formula: (annual_demand/12) + safety_stock
             avg_inventory = (annual_demand / 12.0) + safety_stock
             financing_cost = avg_inventory * 1.08 * (interest_rate / 100.0) * unit_cost
 
@@ -540,7 +528,6 @@ st.markdown("<p class='subheader-font'>Labor Cost Calculation</p>", unsafe_allow
 if st.button("Calculate Labor Costs"):
     total_labor_cost = 0.0
     for wh in warehouse_data:
-        # Labor cost for warehouse = avg_employee_salary * number_of_employees
         labor_cost = wh["avg_employee_salary"] * wh["num_employees"]
         wh["labor_cost"] = labor_cost
         total_labor_cost += labor_cost
