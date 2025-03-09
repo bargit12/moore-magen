@@ -48,7 +48,6 @@ unit_cost = st.number_input(
     min_value=0,
     value=10.0,
     step=1,
-    format="%.0f"
 )
 
 # Calculate Z_value from service_level
