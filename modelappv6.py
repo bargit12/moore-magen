@@ -87,7 +87,7 @@ overhead_factor_front = st.number_input(
 # =============================================================================
 st.markdown("<p class='subheader-font'>Market Areas Setup</p>", unsafe_allow_html=True)
 
-base_market_areas = ["CAN", "CAS", "NE", "FL", "TX"]
+base_market_areas = ["FL", "CA_SOUTH", "CA_NORTH", "TX", "NJ"]
 st.write("Standard market areas:", base_market_areas)
 
 custom_market_areas_str = st.text_input("Enter additional market areas (comma separated)", value="")
@@ -158,7 +158,7 @@ for area in selected_market_areas:
 # =============================================================================
 st.markdown("<p class='subheader-font'>Warehouse Setup</p>", unsafe_allow_html=True)
 
-base_warehouse_locations = ["CAN", "CAS", "NE", "FL", "TX"]
+base_warehouse_locations = ["FL", "CA_SOUTH", "CA_NORTH", "TX", "NJ"]
 st.write("Standard warehouse locations:", base_market_areas)
 
 custom_warehouse_locations_str = st.text_input("Enter additional warehouse locations (comma separated)", value="")
