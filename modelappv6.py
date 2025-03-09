@@ -46,7 +46,7 @@ if layout_type == "Main Regionals":
 unit_cost = st.number_input(
     "Unit Cost (per unit, in $)",
     min_value=0,
-    value=10,
+    value=10.0,
     step=1,
     format="%.0f"
 )
