@@ -43,7 +43,7 @@ if layout_type == "Main Regionals":
     st.info("Note: With 'Main Regionals', all warehouses must be of type MAIN.")
 
 shipping_cost_rate = st.number_input(
-    "Shipping Cost Rate (per mile per order unit, in $)",
+    "Shipping Cost Rate (per mile per order unit, in $) - used for Central & Fronts or general",
     min_value=0.0,
     value=1.0,
     step=0.1,
@@ -60,32 +60,6 @@ unit_cost = st.number_input(
 
 # Calculate Z_value from service_level
 Z_value = norm.ppf(service_level)
-
-# =============================================================================
-# Additional Input for Main Regionals Shipping (Land)
-# =============================================================================
-additional_market_distances = {}
-shipping_cost_per_order_unit = 0.5  # default value
-if layout_type == "Main Regionals":
-    add_info = st.text_input("For MAIN warehouses serving multiple markets: Enter additional market distances as 'market:distance, ...' (in miles)", value="")
-    if add_info:
-        entries = add_info.split(",")
-        for entry in entries:
-            parts = entry.split(":")
-            if len(parts) == 2:
-                market = parts[0].strip()
-                try:
-                    dist = float(parts[1].strip())
-                    additional_market_distances[market] = dist
-                except:
-                    st.error(f"Could not parse distance for market '{market}'.")
-    shipping_cost_per_order_unit = st.number_input(
-        "Shipping Cost per Order Unit per Mile (for additional markets, in $)",
-        min_value=0.0,
-        value=0.5,
-        step=0.1,
-        format="%.2f"
-    )
 
 # =============================================================================
 # Rental Parameters
@@ -193,7 +167,7 @@ for area in selected_market_areas:
 st.markdown("<p class='subheader-font'>Warehouse Setup</p>", unsafe_allow_html=True)
 
 base_warehouse_locations = ["CAN", "CAS", "NE", "FL", "TX"]
-st.write("Standard warehouse locations:", base_market_areas)
+st.write("Standard warehouse locations:", base_warehouse_locations)
 
 custom_warehouse_locations_str = st.text_input("Enter additional warehouse locations (comma separated)", value="")
 custom_warehouse_locations = [loc.strip() for loc in custom_warehouse_locations_str.split(",") if loc.strip() != ""]
@@ -225,12 +199,33 @@ for i in range(int(num_warehouses)):
     
     avg_employee_salary = st.number_input(f"Enter Average Annual Salary per Employee for Warehouse {i+1} (in $)", min_value=0, value=50000, step=1000, format="%d", key=f"employee_salary_{i}")
     
-    # Labor: number of employees (defaults vary)
+    # Labor: number of employees with defaults:
     if wh_type == "MAIN":
         default_emp = 3 if len(served_markets) == 1 else 4
     else:
         default_emp = 2
     num_employees = st.number_input(f"Enter Number of Employees for Warehouse {i+1}", min_value=0, value=default_emp, step=1, key=f"num_employees_{i}")
+    
+    # For MAIN warehouses in Main Regionals, if they serve multiple markets, ask for distance & shipping cost for each additional area
+    land_shipping_data = {}
+    if wh_type == "MAIN" and layout_type == "Main Regionals" and len(served_markets) > 1:
+        st.markdown(f"<p class='big-font'>Additional Land Shipping Inputs for Warehouse {i+1} (Main Regionals)</p>", unsafe_allow_html=True)
+        # Assume the first market is primary; for each additional market we ask for distance and shipping cost
+        primary_market = served_markets[0]
+        additional_markets = served_markets[1:]
+        for add_area in additional_markets:
+            distance_label = f"Distance (miles) from warehouse {location} to area {add_area}"
+            distance_val = st.number_input(distance_label, min_value=0.0, value=0.0, step=0.1, format="%.1f", key=f"dist_{i}_{add_area}")
+            
+            # Show user the avg_order_size for this area:
+            area_aos = market_area_data[add_area]["avg_order_size"]
+            cost_label = f"Shipping cost per average order of {area_aos} units per mile for area {add_area}"
+            cost_val = st.number_input(cost_label, min_value=0.0, value=0.0, step=0.1, format="%.2f", key=f"cost_{i}_{add_area}")
+            
+            land_shipping_data[add_area] = {
+                "distance": distance_val,
+                "cost_for_avg_order_per_mile": cost_val
+            }
     
     wh_dict = {
         "location": location,
@@ -241,6 +236,8 @@ for i in range(int(num_warehouses)):
         "avg_employee_salary": avg_employee_salary,
         "num_employees": num_employees,
     }
+    if land_shipping_data:
+        wh_dict["land_shipping_data"] = land_shipping_data
     
     if wh_type == "MAIN":
         lt_shipping = st.number_input(f"Enter Lead Time (days) for shipping from Israel to Warehouse {i+1} (MAIN)", min_value=0, value=5, step=1, format="%d", key=f"lt_shipping_{i}")
@@ -272,6 +269,7 @@ for i in range(int(num_warehouses)):
         else:
             st.error(f"No MAIN warehouse available to serve Warehouse {i+1} (FRONT). Please define a MAIN warehouse first.")
             wh_dict["serving_central"] = None
+    
     warehouse_data.append(wh_dict)
 
 # =============================================================================
@@ -287,39 +285,43 @@ if market_not_served:
     st.error(f"The following market areas are not served by any warehouse: {', '.join(market_not_served)}")
 
 # =============================================================================
-# Helper Functions for Rental Calculation
+# Helper Functions
 # =============================================================================
 
 def compute_safety_stock_main(warehouse, layout):
-    # Sum std deviations for central's served markets...
     std_sum = 0.0
     for area in warehouse["served_markets"]:
         if area in market_area_data:
             std_sum += market_area_data[area]["std_daily_demand"]
-    # Plus, for each FRONT warehouse served by this central, add their std deviations as well.
-    for wh in warehouse_data:
-        if wh["type"] == "FRONT" and wh.get("serving_central") and (warehouse["location"] in wh["serving_central"]):
-            for area in wh["served_markets"]:
-                if area in market_area_data:
-                    std_sum += market_area_data[area]["std_daily_demand"]
-    LT = warehouse.get("lt_shipping", 0)
-    safety_stock_main = std_sum * sqrt(LT) * Z_value
+    if layout == "Central and Fronts":
+        front_daily_demand = 0.0
+        for wh in warehouse_data:
+            if wh["type"] == "FRONT":
+                front_daily_demand += sum(
+                    market_area_data[a]["avg_daily_demand"]
+                    for a in wh["served_markets"]
+                    if a in market_area_data
+                )
+        std_sum = std_sum  # (we do not add std for front, only daily demand)
+        safety_stock_main = std_sum * sqrt(warehouse.get("lt_shipping", 0)) * Z_value
+        # add 12 * front_daily_demand
+        safety_stock_main += 12 * front_daily_demand
+    else:
+        # main regionals
+        LT = warehouse.get("lt_shipping", 0)
+        safety_stock_main = std_sum * sqrt(LT) * Z_value
     return safety_stock_main
 
 def compute_max_monthly_forecast(warehouse):
     max_monthly = 0
-    served_markets = warehouse["served_markets"]
     for m in range(12):
         month_sum = 0
-        for area in served_markets:
+        for area in warehouse["served_markets"]:
             if area in market_area_data:
                 month_sum += market_area_data[area]["forecast_demand"][m]
         if month_sum > max_monthly:
             max_monthly = month_sum
     return max_monthly
-
-def compute_max_monthly_forecast_front(warehouse):
-    return compute_max_monthly_forecast(warehouse)
 
 def compute_daily_demand_sum(warehouse):
     return sum(
@@ -338,6 +340,7 @@ if st.button("Calculate Rental Costs"):
         rent_method = wh["rent_pricing_method"]
         rent_price = wh["rent_price"]
         wh_type = wh["type"]
+        
         if rent_method == "Fixed Rent Price":
             wh_rental_cost = rent_price
             wh_area = 0.0
@@ -348,15 +351,17 @@ if st.button("Calculate Rental Costs"):
                 total_units = max_monthly + safety_stock_main
                 wh_rental_cost = rent_price * sq_ft_per_unit * overhead_factor_main * total_units
                 wh_area = wh_rental_cost / rent_price
-            else:  # FRONT
-                max_monthly = compute_max_monthly_forecast_front(wh)
+            else:
+                max_monthly = compute_max_monthly_forecast(wh)
                 daily_sum = compute_daily_demand_sum(wh)
                 total_units = (max_monthly / 4.0) + (daily_sum * 12.0)
                 wh_rental_cost = rent_price * sq_ft_per_unit * overhead_factor_front * total_units
                 wh_area = wh_rental_cost / rent_price
+        
         wh["rental_cost"] = wh_rental_cost
         wh["rental_area"] = wh_area
         total_rental_cost += wh_rental_cost
+    
     st.subheader("Rental Cost Results")
     for i, wh in enumerate(warehouse_data):
         st.write(f"**Warehouse {i+1}** - Location: {wh['location']}")
@@ -369,7 +374,7 @@ if st.button("Calculate Rental Costs"):
     st.write(f"**Total Rental Cost for All Warehouses:** ${total_rental_cost:.2f}")
 
 # =============================================================================
-# Inventory Financing Calculation (UPDATED FORMULA)
+# Inventory Financing Calculation
 # =============================================================================
 st.markdown("<p class='subheader-font'>Inventory Financing Calculation</p>", unsafe_allow_html=True)
 if st.button("Calculate Inventory Financing"):
@@ -382,57 +387,34 @@ if st.button("Calculate Inventory Financing"):
         if main_wh is None:
             st.error("No MAIN warehouse found for 'Central and Fronts' layout.")
         else:
-            std_sum = sum(
-                market_area_data[area]["std_daily_demand"]
-                for area in main_wh["served_markets"]
-                if area in market_area_data
-            )
-            LT = main_wh.get("lt_shipping", 0)
-            # Updated safety stock: includes std deviations for front warehouses as well.
             safety_stock_main = compute_safety_stock_main(main_wh, layout_type)
-            safety_stock = safety_stock_main  # Now already כולל את כל הסטיות
-
             annual_demand = 0.0
             for area in main_wh["served_markets"]:
                 if area in market_area_data:
                     annual_demand += sum(market_area_data[area]["forecast_demand"])
-
-            # Updated avg_inventory formula: (annual_demand/12) + safety_stock
-            avg_inventory = (annual_demand / 12.0) + safety_stock
+            avg_inventory = (annual_demand / 12.0) + safety_stock_main
             financing_cost = avg_inventory * 1.08 * (interest_rate / 100.0) * unit_cost
 
             total_avg_inventory = avg_inventory
-            total_safety_stock = safety_stock
+            total_safety_stock = safety_stock_main
 
     elif layout_type == "Main Regionals":
-        overall_annual_demand = 0.0
         overall_avg_inventory = 0.0
         overall_safety_stock = 0.0
-
         for wh in warehouse_data:
             if wh["type"] == "MAIN":
-                std_sum = sum(
-                    market_area_data[area]["std_daily_demand"]
-                    for area in wh["served_markets"]
-                    if area in market_area_data
-                )
-                LT = wh.get("lt_shipping", 0)
-                safety_stock_wh = std_sum * sqrt(LT) * Z_value
-
+                safety_stock_main = compute_safety_stock_main(wh, layout_type)
                 annual_demand_wh = 0.0
                 for area in wh["served_markets"]:
                     if area in market_area_data:
                         annual_demand_wh += sum(market_area_data[area]["forecast_demand"])
-
-                avg_inventory_wh = (annual_demand_wh / 12.0) + safety_stock_wh
-
-                overall_safety_stock += safety_stock_wh
+                avg_inventory_wh = (annual_demand_wh / 12.0) + safety_stock_main
                 overall_avg_inventory += avg_inventory_wh
-                overall_annual_demand += annual_demand_wh
-
+                overall_safety_stock += safety_stock_main
+        
+        financing_cost = overall_avg_inventory * 1.08 * (interest_rate / 100.0) * unit_cost
         total_avg_inventory = overall_avg_inventory
         total_safety_stock = overall_safety_stock
-        financing_cost = overall_avg_inventory * 1.08 * (interest_rate / 100.0) * unit_cost
 
     st.subheader("Inventory Financing Results")
     st.write(f"Total Safety Stock: {total_safety_stock:.2f} units")
@@ -463,6 +445,7 @@ if st.button("Calculate Shipping Costs"):
             if main_wh is None:
                 st.error("No MAIN warehouse found for shipping cost calculation (Central & Fronts).")
             else:
+                # Calculate sea shipping cost for each area
                 for area in main_wh["served_markets"]:
                     if area in market_area_data:
                         annual_forecast = sum(market_area_data[area]["forecast_demand"])
@@ -481,6 +464,7 @@ if st.button("Calculate Shipping Costs"):
 
     # --- Land Shipping Cost ---
     if layout_type == "Central and Fronts":
+        # FRONT warehouses
         for wh in warehouse_data:
             if wh["type"] == "FRONT":
                 warehouse_land_cost = 0.0
@@ -498,21 +482,25 @@ if st.button("Calculate Shipping Costs"):
                     warehouse_land_cost += weekly_shipping_cost * 4
                 total_land_shipping_cost += warehouse_land_cost
     elif layout_type == "Main Regionals":
+        # MAIN warehouses serving multiple markets
         for wh in warehouse_data:
             if wh["type"] == "MAIN":
-                served = wh["served_markets"]
-                if served:
-                    primary_market = served[0]
-                    wh_land_cost = 0.0
-                    for area in served[1:]:
-                        if area in market_area_data:
+                if len(wh["served_markets"]) > 1:
+                    # Assume first market is primary, for each additional we do the cost
+                    additional_data = wh.get("land_shipping_data", {})
+                    for area in wh["served_markets"][1:]:
+                        if area in market_area_data and area in additional_data:
                             annual_forecast = sum(market_area_data[area]["forecast_demand"])
-                            avg_order = market_area_data[area]["avg_order_size"]
-                            orders = annual_forecast / avg_order if avg_order > 0 else 0
-                            distance = additional_market_distances.get(area, 0)
-                            area_land_cost = distance * shipping_cost_per_order_unit * orders
-                            wh_land_cost += area_land_cost
-                    total_land_shipping_cost += wh_land_cost
+                            avg_size = market_area_data[area]["avg_order_size"]
+                            
+                            distance = additional_data[area]["distance"]
+                            cost_for_avg_order_per_mile = additional_data[area]["cost_for_avg_order_per_mile"]
+                            # Convert to cost per single unit per mile:
+                            cost_per_unit_per_mile = cost_for_avg_order_per_mile / avg_size
+                            
+                            # Land cost = distance * cost_per_unit_per_mile * annual_forecast
+                            area_land_cost = distance * cost_per_unit_per_mile * annual_forecast
+                            total_land_shipping_cost += area_land_cost
 
     total_shipping_cost = total_sea_shipping_cost + total_land_shipping_cost
 
@@ -550,7 +538,7 @@ if st.button("Submit Data"):
         "interest_rate": f"{interest_rate} %",
         "service_level": service_level,
         "layout_type": layout_type,
-        "shipping_cost_rate": f"${shipping_cost_rate:.2f} per mile/unit",
+        "shipping_cost_rate": f"${shipping_cost_rate:.2f} per mile/unit (for general usage)",
         "unit_cost": f"${unit_cost}"
     })
     st.write("Market Area Data:", market_area_data)
