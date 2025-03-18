@@ -20,7 +20,7 @@ st.markdown(
 st.markdown("<p class='header-font'>Supply Chain & Inventory Model Setup</p>", unsafe_allow_html=True)
 
 interest_rate = st.number_input(
-    "Market Interest Rate (%)",
+    "Actual Interest Rate (%)",
     min_value=0.0,
     max_value=100.0,
     value=5.0,
@@ -44,9 +44,9 @@ if layout_type == "Main Regionals":
 
 # Note: Removed global shipping cost rate input.
 unit_cost = st.number_input(
-    "Unit Cost (per unit, in $)",
+    "Unit (4 Panels) Cost (per unit, in $)",
     min_value=0.0,
-    value=10.0,
+    value=80.0,
     step=1.0,
 )
 
@@ -59,7 +59,7 @@ Z_value = norm.ppf(service_level)
 st.markdown("<p class='subheader-font'>Rental Parameters</p>", unsafe_allow_html=True)
 
 sq_ft_per_unit = st.number_input(
-    "Square feet required per unit (default 0.8)",
+    "Square feet required per unit (4 Panels) - (default 0.8)",
     min_value=0.0,
     value=0.8,
     step=0.1,
@@ -415,7 +415,7 @@ if st.button("Calculate Inventory Financing"):
 st.markdown("<p class='subheader-font'>Shipping Cost Calculation</p>", unsafe_allow_html=True)
 
 container_capacity_40 = st.number_input(
-    "Container Capacity for 40ft HC (units, default 600)",
+    "Container Capacity for 40ft HC (s, default 600)",
     min_value=0,
     value=600,
     step=1,
